@@ -24,16 +24,19 @@ import string
 from base64 import b64encode, b64decode
 from datetime import datetime
 from requests.sessions import Session
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from intuitlib.config import DISCOVERY_URL, ACCEPT_HEADER
 from intuitlib.enums import Scopes
 from intuitlib.exceptions import AuthClientError
 
 
-def get_discovery_doc(environment, session=None):
+def get_discovery_doc(environment, session=None, max_retries=3):
     """Gets discovery doc based on environment specified.
     :param environment: App environment, accepted values: 'sandbox','production','prod','e2e'
     :param session: `requests.Session` object if a session is already being used, defaults to None
+    :param max_retries: Maximum number of retry attempts, defaults to 3
     :return: Discovery doc response 
     :raises HTTPError: if response status != 200
     """
@@ -43,11 +46,23 @@ def get_discovery_doc(environment, session=None):
         discovery_url = DISCOVERY_URL['sandbox']
     else:
         discovery_url = environment
-        
+    
+    retry_strategy = Retry(
+        total=max_retries,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    
     if session is not None and isinstance(session, Session):
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("https://", adapter)
         response = session.get(url=discovery_url)
     else:
-        response = requests.get(url=discovery_url)
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        with requests.Session() as temp_session:
+            temp_session.mount("https://", adapter)
+            response = temp_session.get(url=discovery_url)
+    
     if response.status_code != 200:
         raise AuthClientError(response)
     return response.json()
