@@ -60,6 +60,7 @@ class TestUtils():
     
     @mock.patch('intuitlib.utils.requests.get')
     def test_get_discovery_doc_bad_response(self, mock_get):
+        get_discovery_doc.cache_clear()
         mock_resp = self.mock_request(status=400)
         mock_get.return_value = mock_resp
 

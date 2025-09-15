@@ -55,7 +55,7 @@ class AuthClient(requests.Session):
         self.state_token = state_token
 
         # Discovery doc contains endpoints based on environment specified
-        discovery_doc = get_discovery_doc(self.environment, session=self)
+        discovery_doc = get_discovery_doc(self.environment)
         self.auth_endpoint = discovery_doc['authorization_endpoint']
         self.token_endpoint = discovery_doc['token_endpoint']
         self.revoke_endpoint = discovery_doc['revocation_endpoint']
