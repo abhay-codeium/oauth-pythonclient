@@ -18,6 +18,8 @@
 import pytest
 import mock
 import requests
+import time
+from unittest.mock import patch
 
 from intuitlib.utils import (
     get_discovery_doc,
@@ -65,6 +67,135 @@ class TestUtils():
 
         with pytest.raises(AuthClientError):
             get_discovery_doc('sandbox')
+
+    @mock.patch('intuitlib.utils.requests.get')
+    @mock.patch('intuitlib.utils.time.sleep')
+    def test_get_discovery_doc_ssl_error_retry_success(self, mock_sleep, mock_get):
+        """Test SSL error triggers retry logic and eventually succeeds"""
+        ssl_error = requests.exceptions.SSLError("SSL: UNEXPECTED_EOF_WHILE_READING")
+        success_response = self.mock_request(status=200, content={
+            'issuer': 'https://oauth.platform.intuit.com/op/v1',
+            'authorization_endpoint': 'https://appcenter.intuit.com/connect/oauth2',
+            'token_endpoint': 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer',
+            'userinfo_endpoint': 'https://sandbox-accounts.platform.intuit.com/v1/openid_connect/userinfo',
+            'revocation_endpoint': 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke',
+            'jwks_uri': 'https://oauth.platform.intuit.com/op/v1/jwks'
+        })
+        
+        mock_get.side_effect = [ssl_error, ssl_error, success_response]
+        
+        result = get_discovery_doc('sandbox')
+        
+        assert mock_get.call_count == 3
+        assert result['issuer'] == 'https://oauth.platform.intuit.com/op/v1'
+        
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(1)  # First retry: 1 * (2^0) = 1s
+        mock_sleep.assert_any_call(2)  # Second retry: 1 * (2^1) = 2s
+
+    @mock.patch('intuitlib.utils.requests.get')
+    @mock.patch('intuitlib.utils.time.sleep')
+    def test_get_discovery_doc_ssl_error_retry_exhausted(self, mock_sleep, mock_get):
+        """Test SSL error retries are exhausted and original error is raised"""
+        ssl_error = requests.exceptions.SSLError("SSL: UNEXPECTED_EOF_WHILE_READING")
+        mock_get.side_effect = [ssl_error, ssl_error, ssl_error]
+        
+        with pytest.raises(requests.exceptions.SSLError):
+            get_discovery_doc('sandbox')
+        
+        assert mock_get.call_count == 3
+        assert mock_sleep.call_count == 2
+
+    @mock.patch('intuitlib.utils.requests.get')
+    @mock.patch('intuitlib.utils.time.sleep')
+    def test_get_discovery_doc_connection_error_retry(self, mock_sleep, mock_get):
+        """Test ConnectionError also triggers retry logic"""
+        conn_error = requests.exceptions.ConnectionError("Connection failed")
+        success_response = self.mock_request(status=200, content={
+            'issuer': 'https://oauth.platform.intuit.com/op/v1',
+            'userinfo_endpoint': 'https://sandbox-accounts.platform.intuit.com/v1/openid_connect/userinfo'
+        })
+        
+        mock_get.side_effect = [conn_error, success_response]
+        
+        result = get_discovery_doc('sandbox')
+        
+        assert mock_get.call_count == 2
+        assert result['issuer'] == 'https://oauth.platform.intuit.com/op/v1'
+        assert mock_sleep.call_count == 1
+        mock_sleep.assert_called_with(1)  # First retry: 1s
+
+    @mock.patch('intuitlib.utils.requests.get')
+    @mock.patch('intuitlib.utils.time.sleep')
+    def test_get_discovery_doc_http_error_no_retry(self, mock_sleep, mock_get):
+        """Test HTTP errors do NOT trigger retry logic (preserve existing behavior)"""
+        error_response = self.mock_request(status=500)
+        mock_get.return_value = error_response
+        
+        with pytest.raises(AuthClientError):
+            get_discovery_doc('sandbox')
+        
+        assert mock_get.call_count == 1
+        assert mock_sleep.call_count == 0
+
+    @mock.patch('intuitlib.utils.Session.get')
+    @mock.patch('intuitlib.utils.time.sleep')
+    def test_get_discovery_doc_ssl_error_with_session(self, mock_sleep, mock_session_get):
+        """Test SSL error retry logic works with provided session"""
+        ssl_error = requests.exceptions.SSLError("SSL: UNEXPECTED_EOF_WHILE_READING")
+        success_response = self.mock_request(status=200, content={
+            'issuer': 'https://oauth.platform.intuit.com/op/v1',
+            'userinfo_endpoint': 'https://sandbox-accounts.platform.intuit.com/v1/openid_connect/userinfo'
+        })
+        
+        mock_session_get.side_effect = [ssl_error, success_response]
+        session = requests.Session()
+        
+        result = get_discovery_doc('sandbox', session=session)
+        
+        assert mock_session_get.call_count == 2
+        assert result['issuer'] == 'https://oauth.platform.intuit.com/op/v1'
+        assert mock_sleep.call_count == 1
+
+    @mock.patch('intuitlib.utils.requests.get')
+    def test_get_discovery_doc_normal_operation_no_delay(self, mock_get):
+        """Test normal successful requests work without retries or delays"""
+        success_response = self.mock_request(status=200, content={
+            'issuer': 'https://oauth.platform.intuit.com/op/v1',
+            'userinfo_endpoint': 'https://sandbox-accounts.platform.intuit.com/v1/openid_connect/userinfo'
+        })
+        mock_get.return_value = success_response
+        
+        start_time = time.time()
+        result = get_discovery_doc('sandbox')
+        end_time = time.time()
+        
+        assert mock_get.call_count == 1
+        assert result['issuer'] == 'https://oauth.platform.intuit.com/op/v1'
+        
+        elapsed_time = end_time - start_time
+        assert elapsed_time < 0.1  # Should be nearly instantaneous
+
+    @mock.patch('intuitlib.utils.requests.get')
+    @mock.patch('intuitlib.utils.time.sleep')
+    def test_get_discovery_doc_mixed_errors(self, mock_sleep, mock_get):
+        """Test mixed SSL and connection errors both trigger retries"""
+        ssl_error = requests.exceptions.SSLError("SSL: UNEXPECTED_EOF_WHILE_READING")
+        conn_error = requests.exceptions.ConnectionError("Connection failed")
+        success_response = self.mock_request(status=200, content={
+            'issuer': 'https://oauth.platform.intuit.com/op/v1',
+            'userinfo_endpoint': 'https://sandbox-accounts.platform.intuit.com/v1/openid_connect/userinfo'
+        })
+        
+        mock_get.side_effect = [ssl_error, conn_error, success_response]
+        
+        result = get_discovery_doc('sandbox')
+        
+        assert mock_get.call_count == 3
+        assert result['issuer'] == 'https://oauth.platform.intuit.com/op/v1'
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(1)  # After first failure
+        mock_sleep.assert_any_call(2)  # After second failure
 
     def test_scopes_to_string_input_string(self):
         with pytest.raises(TypeError):
