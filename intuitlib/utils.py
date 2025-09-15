@@ -21,6 +21,7 @@ import random
 import requests
 import six
 import string
+import time
 from base64 import b64encode, b64decode
 from datetime import datetime
 from requests.sessions import Session
@@ -36,6 +37,7 @@ def get_discovery_doc(environment, session=None):
     :param session: `requests.Session` object if a session is already being used, defaults to None
     :return: Discovery doc response 
     :raises HTTPError: if response status != 200
+    :raises SSLError: if SSL connection fails after retries
     """
     if environment.lower() in ['production', 'prod']:
         discovery_url = DISCOVERY_URL['production']
@@ -43,14 +45,28 @@ def get_discovery_doc(environment, session=None):
         discovery_url = DISCOVERY_URL['sandbox']
     else:
         discovery_url = environment
-        
-    if session is not None and isinstance(session, Session):
-        response = session.get(url=discovery_url)
-    else:
-        response = requests.get(url=discovery_url)
-    if response.status_code != 200:
-        raise AuthClientError(response)
-    return response.json()
+    
+    max_retries = 3
+    backoff_factor = 1
+    
+    for attempt in range(max_retries):
+        try:
+            if session is not None and isinstance(session, Session):
+                response = session.get(url=discovery_url)
+            else:
+                response = requests.get(url=discovery_url)
+            
+            if response.status_code != 200:
+                raise AuthClientError(response)
+            return response.json()
+            
+        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+            if attempt < max_retries - 1:
+                wait_time = backoff_factor * (2 ** attempt)
+                time.sleep(wait_time)
+                continue
+            else:
+                raise e
 
 def set_attributes(obj, response_json):
     """Sets attribute to an object from a dict
