@@ -58,10 +58,12 @@ class TestUtils():
         assert discovery_doc['issuer'] =='https://oauth.platform.intuit.com/op/v1'
         assert discovery_doc['userinfo_endpoint'] == 'https://sandbox-accounts.platform.intuit.com/v1/openid_connect/userinfo'
     
-    @mock.patch('intuitlib.utils.requests.get')
-    def test_get_discovery_doc_bad_response(self, mock_get):
+    @mock.patch('intuitlib.utils.requests.Session')
+    def test_get_discovery_doc_bad_response(self, mock_session_class):
+        mock_session = mock.Mock()
+        mock_session_class.return_value.__enter__.return_value = mock_session
         mock_resp = self.mock_request(status=400)
-        mock_get.return_value = mock_resp
+        mock_session.get.return_value = mock_resp
 
         with pytest.raises(AuthClientError):
             get_discovery_doc('sandbox')
